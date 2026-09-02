@@ -129,16 +129,21 @@ export default function ReciboImagenDemo() {
 
   useEffect(() => { generarRecibo(EJEMPLO, firma); }, [firma, generarRecibo]);
 
+  const descargar = () => {
+    if (!reciboUrl) return;
+    const a = document.createElement("a"); a.href = reciboUrl; a.download = `recibo-cuota-${EJEMPLO.n}.png`; a.click();
+    setCompartido(true);
+  };
   const compartir = async () => {
     if (!reciboUrl) return;
-    const blob = await (await fetch(reciboUrl)).blob();
-    const file = new File([blob], `recibo-cuota-${EJEMPLO.n}.png`, { type: "image/png" });
-    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-      try { await navigator.share({ text: `Recibo de pago — ${EJEMPLO.nombre}`, files: [file] }); setCompartido(true); } catch (e) { }
-    } else {
-      const a = document.createElement("a"); a.href = reciboUrl; a.download = file.name; a.click();
-      setCompartido(true);
-    }
+    try {
+      const blob = await (await fetch(reciboUrl)).blob();
+      const file = new File([blob], `recibo-cuota-${EJEMPLO.n}.png`, { type: "image/png" });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file] }); setCompartido(true); return;
+      }
+    } catch (e) { }
+    descargar();
   };
 
   return (
