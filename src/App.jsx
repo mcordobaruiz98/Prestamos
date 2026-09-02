@@ -312,11 +312,42 @@ export default function LibroDePrestamos() {
       }; img.src = firmaImg;
     } else { ctx.font = `12px ${mono}`; ctx.fillStyle = INK_SOFT; ctx.fillText("(Sin firma configurada)", 40, 340); finalize(); }
   };
-  const descargarRecibo = () => { if (!reciboUrl || !recibo) return; const a = document.createElement("a"); a.href = reciboUrl; a.download = `recibo-cuota-${recibo.n}.png`; a.click(); };
+  const descargarRecibo = () => { if (!reciboUrl || !recibo) return; const a = document.createElement("a"); a.href = reciboUrl; a.download = `recibo-${recibo.n === "abono" ? "abono-capital" : "cuota-" + recibo.n}.png`; a.click(); };
   const compartirRecibo = async () => {
     if (!reciboUrl || !recibo) return;
-    try { const blob = await (await fetch(reciboUrl)).blob(); const file = new File([blob], `recibo-cuota-${recibo.n}.png`, { type: "image/png" }); if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; } } catch (e) { }
+    try { const blob = await (await fetch(reciboUrl)).blob(); const file = new File([blob], `recibo-${recibo.n === "abono" ? "abono-capital" : "cuota-" + recibo.n}.png`, { type: "image/png" }); if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; } } catch (e) { }
     descargarRecibo();
+  };
+
+  // ---- Generar recibo de ABONO A CAPITAL como imagen ----
+  const generarReciboAbono = (rec, firmaImg) => {
+    const W = 600, H = 470, c = document.createElement("canvas"); c.width = W; c.height = H;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = PAPER; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.strokeRect(20, 20, W - 40, H - 40);
+    const sx = 40, sy = 50, sw = 250, sh = 34;
+    ctx.strokeStyle = BLUE; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, 6); ctx.stroke();
+    ctx.font = `bold 14px ${mono}`; ctx.fillStyle = BLUE; ctx.textBaseline = "middle"; ctx.fillText("ABONO A CAPITAL", sx + 16, sy + sh / 2);
+    ctx.textBaseline = "alphabetic";
+    ctx.font = `bold 22px ${sans}`; ctx.fillStyle = INK; ctx.fillText(rec.nombre, 40, 120);
+    ctx.font = `15px ${mono}`; ctx.fillStyle = INK_SOFT; ctx.fillText(rec.tipo, 40, 148);
+    ctx.font = `bold 42px ${mono}`; ctx.fillStyle = INK; ctx.fillText(fmtCOP(rec.monto), 40, 200);
+    ctx.strokeStyle = RULE; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(40, 220); ctx.lineTo(W - 40, 220); ctx.stroke();
+    ctx.font = `14px ${mono}`; ctx.fillStyle = INK; ctx.fillText(`Fecha: ${fmtFecha(rec.fecha)}`, 40, 248);
+    ctx.font = `bold 14px ${mono}`; ctx.fillStyle = BLUE; ctx.fillText(`Nueva cuota: ${fmtCOP(rec.nuevaCuota)}`, 40, 274);
+    ctx.strokeStyle = RULE; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(40, 300); ctx.lineTo(W - 40, 300); ctx.stroke();
+    const finalize = () => { setReciboUrl(c.toDataURL("image/png")); };
+    if (firmaImg) {
+      const img = new Image(); img.onload = () => {
+        const maxW = 200, maxH = 80, ratio = Math.min(maxW / img.width, maxH / img.height);
+        ctx.drawImage(img, 40, 315, img.width * ratio, img.height * ratio);
+        ctx.strokeStyle = INK_SOFT; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(40, 410); ctx.lineTo(260, 410); ctx.stroke();
+        ctx.font = `11px ${mono}`; ctx.fillStyle = INK_SOFT; ctx.fillText("Firma del prestamista", 40, 428);
+        ctx.beginPath(); ctx.moveTo(320, 410); ctx.lineTo(W - 40, 410); ctx.stroke(); ctx.fillText("Fecha", 320, 428);
+        ctx.fillText(fmtFecha(rec.fecha), 320, 398);
+        finalize();
+      }; img.src = firmaImg;
+    } else { ctx.font = `12px ${mono}`; ctx.fillStyle = INK_SOFT; ctx.fillText("(Sin firma configurada)", 40, 340); finalize(); }
   };
 
   const registrarCobro = (expId, n, monto, fecha) => {
@@ -332,8 +363,16 @@ export default function LibroDePrestamos() {
   };
   const limpiarCuota = (n) => setExpedientes((prev) => prev.map((e) => { if (e.id !== activeExp.id) return e; const pagos = { ...(e.pagos || {}) }; delete pagos[n]; return { ...e, pagos }; }));
   const agregarAbono = () => {
-    const monto = Number(abonoMonto) || 0; if (monto <= 0) return;
-    setExpedientes((prev) => prev.map((e) => e.id !== activeExp.id ? e : { ...e, abonosCapital: [...(e.abonosCapital || []), { id: Date.now(), monto, fecha: abonoFecha }] }));
+    const monto = Number(abonoMonto) || 0; if (monto <= 0 || !activeExp) return;
+    const nextAb = [...(activeExp.abonosCapital || []), { id: Date.now(), monto, fecha: abonoFecha }];
+    const nextExp = { ...activeExp, abonosCapital: nextAb };
+    setExpedientes((prev) => prev.map((e) => e.id !== activeExp.id ? e : nextExp));
+    // Calcular nueva cuota después del abono
+    const cuadroPost = derivarCuadro(nextExp);
+    const filaSig = cuadroPost.filas.find((f) => f.n >= 1 && f.valor > 0 && !f.cancelada);
+    const nuevaCuota = filaSig ? filaSig.valor : 0;
+    setRecibo({ nombre: activeExp.nombreDeudor, tipo: activeExp.tipoCredito, n: "abono", monto, fecha: abonoFecha });
+    generarReciboAbono({ nombre: activeExp.nombreDeudor, tipo: activeExp.tipoCredito, monto, fecha: abonoFecha, nuevaCuota }, firma);
     setAbonoMonto(0); setAbonoFecha(hoyISO()); setAbonoOpen(false);
   };
   const quitarAbono = (id) => setExpedientes((prev) => prev.map((e) => e.id !== activeExp.id ? e : { ...e, abonosCapital: (e.abonosCapital || []).filter((a) => a.id !== id) }));
