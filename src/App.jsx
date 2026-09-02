@@ -198,13 +198,17 @@ export default function LibroDePrestamos() {
 
   const [nombreDeudor, setNombreDeudor] = useState("");
   const [docDeudor, setDocDeudor] = useState("");
+  const [docFoto, setDocFoto] = useState(null);
   const [telefono, setTelefono] = useState("");
-  const [garantias, setGarantias] = useState([{ tipo: "Inmueble", folio: "", desc: "" }]);
+  const [garantias, setGarantias] = useState([{ tipo: "Inmueble", folio: "", desc: "", fotos: [] }]);
   const [fiadorOn, setFiadorOn] = useState(false);
   const [fiadorNombre, setFiadorNombre] = useState("");
   const [fiadorDoc, setFiadorDoc] = useState("");
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState("");
   const [errorReg, setErrorReg] = useState("");
+  const [visorImg, setVisorImg] = useState(null);
+  const docFileRef = useRef(null);
+  const garFileRefs = useRef({});
 
   const [pagoOpen, setPagoOpen] = useState(null);
   const [pagoMonto, setPagoMonto] = useState(0);
@@ -252,8 +256,31 @@ export default function LibroDePrestamos() {
     setTipoCredito("Hipoteca"); setValor(10000000); setTasa("2"); setPlazo("36"); setFechaInicio(hoyISO());
     setMoraActiva(false); setMoraValor(0); setScreen("calc");
   };
+  // ---- Adjuntar imágenes / PDF (comprimir para que quepa en localStorage) ----
+  const comprimirImg = (file, maxW = 800) => new Promise((resolve) => {
+    if (file.type === "application/pdf") {
+      const reader = new FileReader(); reader.onload = () => resolve({ data: reader.result, type: "pdf", name: file.name }); reader.readAsDataURL(file); return;
+    }
+    const reader = new FileReader(); reader.onload = () => {
+      const img = new Image(); img.onload = () => {
+        const ratio = Math.min(1, maxW / img.width); const w = img.width * ratio, h = img.height * ratio;
+        const c = document.createElement("canvas"); c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve({ data: c.toDataURL("image/jpeg", 0.7), type: "image", name: file.name });
+      }; img.src = reader.result;
+    }; reader.readAsDataURL(file);
+  });
+  const onDocFoto = async (e) => { const f = e.target.files[0]; if (f) setDocFoto(await comprimirImg(f)); e.target.value = ""; };
+  const onGarFoto = async (idx, e) => {
+    const files = [...e.target.files]; if (!files.length) return;
+    const nuevas = await Promise.all(files.map((f) => comprimirImg(f)));
+    setGarantias((g) => g.map((x, i) => i === idx ? { ...x, fotos: [...(x.fotos || []), ...nuevas] } : x));
+    e.target.value = "";
+  };
+  const delGarFoto = (gIdx, fIdx) => setGarantias((g) => g.map((x, i) => i === gIdx ? { ...x, fotos: (x.fotos || []).filter((_, j) => j !== fIdx) } : x));
+
   const irRegistrar = () => {
-    setNombreDeudor(""); setDocDeudor(""); setTelefono(""); setGarantias([{ tipo: "Inmueble", folio: "", desc: "" }]);
+    setNombreDeudor(""); setDocDeudor(""); setDocFoto(null); setTelefono(""); setGarantias([{ tipo: "Inmueble", folio: "", desc: "", fotos: [] }]);
     setFiadorOn(false); setFiadorNombre(""); setFiadorDoc("");
     setFechaPrimeraCuota(addMonths(fechaInicio, 1).toISOString().slice(0, 10));
     setErrorReg(""); setScreen("register");
@@ -263,8 +290,8 @@ export default function LibroDePrestamos() {
     const a = arr ? null : calcAmort(valor, tasa, plazo);
     const exp = {
       id: Date.now(), tipoCredito, valor: Number(valor), tasa, plazo: Number(plazo),
-      fechaInicio, fechaPrimeraCuota, nombreDeudor: nombreDeudor.trim(), docDeudor: docDeudor.trim(), telefono: telefono.trim(),
-      garantias: garantias.filter((g) => g.folio || g.desc),
+      fechaInicio, fechaPrimeraCuota, nombreDeudor: nombreDeudor.trim(), docDeudor: docDeudor.trim(), docFoto, telefono: telefono.trim(),
+      garantias: garantias.filter((g) => g.folio || g.desc || (g.fotos && g.fotos.length)),
       fiador: fiadorOn && fiadorNombre.trim() ? { nombre: fiadorNombre.trim(), doc: fiadorDoc.trim() } : null,
       cuota: arr ? Number(valor) : a.cuota, totalPagar: arr ? Number(valor) * Number(plazo) : a.totalPagar,
       ganancia: arr ? 0 : a.ganancia, pct: arr ? 0 : a.pct,
@@ -576,7 +603,12 @@ export default function LibroDePrestamos() {
             <label style={S.lbl}>{arr ? "Nombre del arrendatario" : "Nombre del deudor"}</label>
             <input style={S.input} value={nombreDeudor} onChange={(e) => setNombreDeudor(e.target.value)} placeholder="Nombre completo" />
             <label style={S.lbl}>Documento de identidad</label>
-            <div style={S.inlineRow}><input style={{ ...S.input, flex: 1 }} value={docDeudor} onChange={(e) => setDocDeudor(e.target.value)} placeholder="N° de cédula" /><button style={S.attachBtn} title="Adjuntar foto (pendiente en este entorno)">📷 Insertar</button></div>
+            <div style={S.inlineRow}>
+              <input style={{ ...S.input, flex: 1 }} value={docDeudor} onChange={(e) => setDocDeudor(e.target.value)} placeholder="N° de cédula" />
+              <button style={S.attachBtn} onClick={() => docFileRef.current && docFileRef.current.click()}>📷 {docFoto ? "Cambiar" : "Insertar"}</button>
+              <input ref={docFileRef} type="file" accept="image/*,application/pdf" capture="environment" style={{ display: "none" }} onChange={onDocFoto} />
+            </div>
+            {docFoto && <div style={S.thumbRow}><img src={docFoto.data} alt="Doc" style={S.thumb} onClick={() => setVisorImg(docFoto.data)} /><button style={S.delMini} onClick={() => setDocFoto(null)}>✕</button></div>}
             <label style={S.lbl}>Teléfono / WhatsApp</label>
             <input type="tel" style={S.input} value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="Ej: 3001234567" />
             <div style={S.divider} />
@@ -585,9 +617,14 @@ export default function LibroDePrestamos() {
               <div style={S.selectWrap}><select style={S.select} value={g.tipo} onChange={(e) => setGar(idx, "tipo", e.target.value)}>{TIPOS_GARANTIA.map((t) => <option key={t}>{t}</option>)}</select><span style={S.caret}>▾</span></div>
               <input style={S.input} value={g.folio} onChange={(e) => setGar(idx, "folio", e.target.value)} placeholder="N° de folio / documento" />
               <input style={S.input} value={g.desc} onChange={(e) => setGar(idx, "desc", e.target.value)} placeholder="Descripción" />
-              <div style={S.garActions}><button style={S.attachBtn} title="Adjuntar foto (pendiente en este entorno)">📷 Foto</button>{garantias.length > 1 && <button style={S.delBtn} onClick={() => setGarantias((gg) => gg.filter((_, i) => i !== idx))}>✕ Quitar</button>}</div>
+              <div style={S.garActions}>
+                <button style={S.attachBtn} onClick={() => garFileRefs.current[idx] && garFileRefs.current[idx].click()}>📷 Foto</button>
+                <input ref={(el) => { garFileRefs.current[idx] = el; }} type="file" accept="image/*,application/pdf" capture="environment" multiple style={{ display: "none" }} onChange={(e) => onGarFoto(idx, e)} />
+                {garantias.length > 1 && <button style={S.delBtn} onClick={() => setGarantias((gg) => gg.filter((_, i) => i !== idx))}>✕ Quitar</button>}
+              </div>
+              {(g.fotos || []).length > 0 && <div style={S.thumbRow}>{g.fotos.map((f, fi) => (<div key={fi} style={S.thumbWrap}><img src={f.data} alt={f.name} style={S.thumb} onClick={() => setVisorImg(f.data)} /><button style={S.delMiniAbs} onClick={() => delGarFoto(idx, fi)}>✕</button></div>))}</div>}
             </div>))}
-            <button style={S.addBtn} onClick={() => setGarantias((g) => [...g, { tipo: "Inmueble", folio: "", desc: "" }])}>+ Agregar garantía</button>
+            <button style={S.addBtn} onClick={() => setGarantias((g) => [...g, { tipo: "Inmueble", folio: "", desc: "", fotos: [] }])}>+ Agregar garantía</button>
             <div style={S.divider} />
             <label style={S.checkRow}><input type="checkbox" checked={fiadorOn} onChange={(e) => setFiadorOn(e.target.checked)} /><span style={S.sectionLabel}>Tiene fiador / codeudor</span></label>
             {fiadorOn && (<div style={S.garBox}><input style={S.input} value={fiadorNombre} onChange={(e) => setFiadorNombre(e.target.value)} placeholder="Nombre del fiador" /><input style={S.input} value={fiadorDoc} onChange={(e) => setFiadorDoc(e.target.value)} placeholder="Documento del fiador" /></div>)}
@@ -614,7 +651,8 @@ export default function LibroDePrestamos() {
                 <div style={S.mini}><span style={S.miniCap}>En mora</span><span style={{ ...S.miniVal, color: res.enMora ? RED : INK }}>{res.enMora}</span></div>
               </div>
               {activeExp.mora && activeExp.mora.activa && <div style={S.moraLine}>Recargo por mora: {fmtCOP(activeExp.mora.valor)} por cuota vencida</div>}
-              {activeExp.garantias.length > 0 && (<div style={S.garSummary}><span style={S.sectionLabel}>{activeArr ? "Garantía / depósito" : "Garantía"}</span>{activeExp.garantias.map((g, i) => <div key={i} style={S.garLine}>{g.tipo}{g.folio ? ` · Folio ${g.folio}` : ""}{g.desc ? ` · ${g.desc}` : ""}</div>)}</div>)}
+              {activeExp.garantias.length > 0 && (<div style={S.garSummary}><span style={S.sectionLabel}>{activeArr ? "Garantía / depósito" : "Garantía"}</span>{activeExp.garantias.map((g, i) => <div key={i}><div style={S.garLine}>{g.tipo}{g.folio ? ` · Folio ${g.folio}` : ""}{g.desc ? ` · ${g.desc}` : ""}</div>{(g.fotos || []).length > 0 && <div style={S.thumbRow}>{g.fotos.map((f, fi) => <img key={fi} src={f.data} alt={f.name} style={S.thumb} onClick={() => setVisorImg(f.data)} />)}</div>}</div>)}</div>)}
+              {activeExp.docFoto && <div style={{ marginTop: 8 }}><span style={S.lbl}>Documento de identidad</span><div style={S.thumbRow}><img src={activeExp.docFoto.data} alt="Doc" style={S.thumb} onClick={() => setVisorImg(activeExp.docFoto.data)} /></div></div>}
               {activeExp.fiador && <div style={S.garLine}><b>Fiador:</b> {activeExp.fiador.nombre}{activeExp.fiador.doc ? ` (${activeExp.fiador.doc})` : ""}</div>}
 
               <div style={{ ...S.sectionLabel, marginTop: 16 }}>{activeArr ? "Cánones" : "Cuadro de letras"}</div>
@@ -716,6 +754,15 @@ export default function LibroDePrestamos() {
         </div>)}
 
         {/* ===== MODAL: RESPALDO ===== */}
+
+        {/* ===== VISOR DE IMAGEN ===== */}
+        {visorImg && (<div style={S.overlay} onClick={() => setVisorImg(null)}>
+          <div style={{ maxWidth: "90%", maxHeight: "90%" }} onClick={(ev) => ev.stopPropagation()}>
+            <img src={visorImg} alt="Documento" style={{ width: "100%", borderRadius: 8, boxShadow: "0 8px 30px rgba(0,0,0,.4)" }} />
+            <button style={{ ...S.btn, ...S.btnGhost, marginTop: 10, background: PAPER }} onClick={() => setVisorImg(null)}>Cerrar</button>
+          </div>
+        </div>)}
+
         {respaldoOpen && (<div style={S.overlay} onClick={() => setRespaldoOpen(false)}>
           <div style={S.modal} onClick={(ev) => ev.stopPropagation()}>
             <div style={S.panelTitle}>Respaldo de datos</div>
@@ -855,6 +902,10 @@ const S = {
   miniVal: { fontFamily: mono, fontSize: 16, fontWeight: 700, color: INK },
   garSummary: { marginTop: 14 },
   garLine: { fontFamily: mono, fontSize: 12.5, color: INK, marginTop: 4 },
+  thumbRow: { display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" },
+  thumbWrap: { position: "relative", display: "inline-block" },
+  thumb: { width: 60, height: 60, objectFit: "cover", borderRadius: 6, border: `1.5px solid ${INK}`, cursor: "pointer" },
+  delMiniAbs: { position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: RED, color: "#fff", border: "none", fontSize: 12, lineHeight: "18px", textAlign: "center", cursor: "pointer", fontFamily: mono },
   overlay: { position: "fixed", inset: 0, background: "rgba(30,26,20,.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 },
   modal: { width: "100%", maxWidth: 360, background: PAPER, border: `2px solid ${INK}`, borderRadius: 14, padding: "16px 18px", boxShadow: "0 16px 40px rgba(0,0,0,.35)" },
   reciboStamp: { display: "inline-block", fontFamily: mono, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: GREEN, border: `2px solid ${GREEN}`, borderRadius: 6, padding: "4px 12px", fontSize: 13, transform: "rotate(-1.5deg)" },
