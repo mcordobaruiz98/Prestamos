@@ -127,6 +127,17 @@ function pagoATiempo(exp, fila) {
   return midnight(parseISO(fc)) <= midnight(fila.fecha) ? "atiempo" : "tarde";
 }
 
+// Resumen global del negocio (todos los expedientes)
+function resumenGlobal(expedientes) {
+  let prestado = 0, porCobrar = 0, enMora = 0, ganancia = 0, recaudado = 0;
+  for (const e of expedientes) {
+    const r = resumen(e);
+    porCobrar += r.porCobrar; enMora += r.enMora; recaudado += r.abonado;
+    if (!esArr(e.tipoCredito)) { prestado += e.valor; ganancia += e.ganancia || 0; }
+  }
+  return { prestado, porCobrar, enMora, ganancia, recaudado, nPrestamos: expedientes.length };
+}
+
 function cobros(expedientes) {
   const hoy = midnight(new Date()); const items = [];
   for (const e of expedientes) {
@@ -201,6 +212,9 @@ export default function LibroDePrestamos() {
   const [fiadorDoc, setFiadorDoc] = useState("");
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState("");
   const [errorReg, setErrorReg] = useState("");
+  const [editandoId, setEditandoId] = useState(null);
+  const [editDatos, setEditDatos] = useState(null);
+  const [confirmBorrar, setConfirmBorrar] = useState(null);
   const [visorImg, setVisorImg] = useState(null);
   const docFileRef = useRef(null);
   const garFileRefs = useRef({});
@@ -397,6 +411,27 @@ export default function LibroDePrestamos() {
   };
   const quitarAbono = (id) => setExpedientes((prev) => prev.map((e) => e.id !== activeExp.id ? e : { ...e, abonosCapital: (e.abonosCapital || []).filter((a) => a.id !== id) }));
 
+  // ---- Editar datos del deudor ----
+  const abrirEdicion = () => {
+    setEditDatos({
+      nombreDeudor: activeExp.nombreDeudor, docDeudor: activeExp.docDeudor || "", telefono: activeExp.telefono || "",
+      moraActiva: activeExp.mora ? activeExp.mora.activa : false, moraValor: activeExp.mora ? activeExp.mora.valor : 0,
+    });
+    setEditandoId(activeExp.id);
+  };
+  const guardarEdicion = () => {
+    if (!editDatos.nombreDeudor.trim()) return;
+    setExpedientes((prev) => prev.map((e) => e.id !== editandoId ? e : {
+      ...e, nombreDeudor: editDatos.nombreDeudor.trim(), docDeudor: editDatos.docDeudor.trim(), telefono: editDatos.telefono.trim(),
+      mora: { activa: editDatos.moraActiva, valor: Number(editDatos.moraValor) || 0 },
+    }));
+    setEditandoId(null); setEditDatos(null);
+  };
+  const eliminarPrestamo = (id) => {
+    setExpedientes((prev) => prev.filter((e) => e.id !== id));
+    setConfirmBorrar(null); setScreen("home");
+  };
+
   const exportar = () => {
     const data = { app: "Libro de Préstamos", version: 1, fecha: new Date().toISOString(), expedientes };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -464,6 +499,7 @@ export default function LibroDePrestamos() {
 
             {homeTab === "cobros" && (() => {
               const items = cobros(expedientes);
+              const g = resumenGlobal(expedientes);
               const atrasadas = items.filter((i) => i.dias < 0).sort((a, b) => a.fecha - b.fecha);
               const deHoy = items.filter((i) => i.dias === 0);
               const proximas = items.filter((i) => i.dias > 0 && i.dias <= 7).sort((a, b) => a.fecha - b.fecha);
@@ -476,8 +512,20 @@ export default function LibroDePrestamos() {
                   <div style={S.cobroActions}><button style={S.cobrarBtn} onClick={() => abrirCobro(it.e, it.f)}>Cobrar</button><a style={S.waBtn} href={waLink(it.e.telefono, msgRecordatorio(it))} target="_blank" rel="noopener noreferrer">WhatsApp</a></div>
                 </div>
               );
-              if (items.length === 0) return (<div style={S.empty}><p style={S.emptyT}>{expedientes.length === 0 ? "Aún no hay préstamos." : "Nada por cobrar. ¡Todo al día!"}</p><p style={S.emptyS}>{expedientes.length === 0 ? "Toca “Nuevo” para registrar el primero." : ""}</p></div>);
+              const ResumenNegocio = () => (expedientes.length === 0 ? null : (
+                <div style={S.resumenBox}>
+                  <div style={S.resumenTitle}>Mi negocio</div>
+                  <div style={S.resumenGrid}>
+                    <div style={S.resumenItem}><span style={S.resumenCap}>En la calle</span><span style={S.resumenVal}>{fmtCOP(g.prestado)}</span></div>
+                    <div style={S.resumenItem}><span style={S.resumenCap}>Por cobrar</span><span style={S.resumenVal}>{fmtCOP(g.porCobrar)}</span></div>
+                    <div style={S.resumenItem}><span style={S.resumenCap}>Ganancia proyectada</span><span style={{ ...S.resumenVal, color: GREEN }}>{fmtCOP(g.ganancia)}</span></div>
+                    <div style={S.resumenItem}><span style={S.resumenCap}>Cuotas en mora</span><span style={{ ...S.resumenVal, color: g.enMora ? RED : INK }}>{g.enMora}</span></div>
+                  </div>
+                </div>
+              ));
+              if (items.length === 0) return (<><ResumenNegocio />{expedientes.length === 0 ? <div style={S.empty}><p style={S.emptyT}>Aún no hay préstamos.</p><p style={S.emptyS}>Toca “Nuevo” para registrar el primero.</p></div> : <div style={{ ...S.empty, padding: "24px 10px" }}><p style={S.emptyT}>Nada por cobrar hoy. ¡Todo al día!</p></div>}</>);
               return (<>
+                <ResumenNegocio />
                 <div style={S.cobroStrip}>
                   <div style={{ ...S.stripBox, borderColor: RED }}><span style={S.stripCap}>Atrasado</span><span style={{ ...S.stripVal, color: RED }}>{fmtCOP(totalAtraso)}</span><span style={S.stripSub}>{atrasadas.length} cuota(s)</span></div>
                   <div style={{ ...S.stripBox, borderColor: AMBER }}><span style={S.stripCap}>Para hoy</span><span style={{ ...S.stripVal, color: AMBER }}>{fmtCOP(totalHoy)}</span><span style={S.stripSub}>{deHoy.length} cuota(s)</span></div>
@@ -692,6 +740,10 @@ export default function LibroDePrestamos() {
                   </div>)}
                 </div>
               )}
+              <div style={S.actions}>
+                <button style={{ ...S.btn, ...S.btnGhost }} onClick={abrirEdicion}>✎ Editar</button>
+                <button style={{ ...S.btn, ...S.btnDanger }} onClick={() => setConfirmBorrar(activeExp.id)}>🗑 Eliminar</button>
+              </div>
               <div style={S.actions}><button style={{ ...S.btn, ...S.btnGhost, flex: 1 }} onClick={() => setScreen(backTarget())}>Volver</button></div>
             </div>
           );
@@ -743,6 +795,32 @@ export default function LibroDePrestamos() {
               <button style={{ ...S.btn, ...S.btnGhost }} onClick={sigClear}>Borrar</button>
               <button style={{ ...S.btn, ...S.btnPrimary }} onClick={sigSave}>Guardar firma</button>
             </div>
+          </div>
+        </div>)}
+
+        {/* ===== MODAL: EDITAR DEUDOR ===== */}
+        {editandoId && editDatos && (<div style={S.overlay} onClick={() => { setEditandoId(null); setEditDatos(null); }}>
+          <div style={S.modal} onClick={(ev) => ev.stopPropagation()}>
+            <div style={S.panelTitle}>Editar datos</div>
+            <label style={S.lbl}>Nombre</label>
+            <input style={S.input} value={editDatos.nombreDeudor} onChange={(e) => setEditDatos({ ...editDatos, nombreDeudor: e.target.value })} />
+            <label style={S.lbl}>Documento</label>
+            <input style={S.input} value={editDatos.docDeudor} onChange={(e) => setEditDatos({ ...editDatos, docDeudor: e.target.value })} />
+            <label style={S.lbl}>Teléfono / WhatsApp</label>
+            <input type="tel" style={S.input} value={editDatos.telefono} onChange={(e) => setEditDatos({ ...editDatos, telefono: e.target.value })} />
+            <label style={{ ...S.checkRow, marginTop: 12 }}><input type="checkbox" checked={editDatos.moraActiva} onChange={(e) => setEditDatos({ ...editDatos, moraActiva: e.target.checked })} /><span style={S.sectionLabel}>Cobrar recargo por mora</span></label>
+            {editDatos.moraActiva && <div style={S.moneyRow}><span style={S.peso}>$</span><input type="text" inputMode="numeric" style={{ ...S.moneyInput, fontSize: 18 }} value={fmtNum(editDatos.moraValor)} onChange={(e) => setEditDatos({ ...editDatos, moraValor: parseInt(e.target.value.replace(/[^\d]/g, "")) || 0 })} /></div>}
+            <div style={S.hint}>El monto, la tasa y el plazo no se editan aquí para no dañar los pagos ya registrados. Si eso está mal, es mejor eliminar y volver a crear el préstamo.</div>
+            <div style={S.actions}><button style={{ ...S.btn, ...S.btnGhost }} onClick={() => { setEditandoId(null); setEditDatos(null); }}>Cancelar</button><button style={{ ...S.btn, ...S.btnPrimary }} onClick={guardarEdicion}>Guardar</button></div>
+          </div>
+        </div>)}
+
+        {/* ===== MODAL: CONFIRMAR BORRADO ===== */}
+        {confirmBorrar && (<div style={S.overlay} onClick={() => setConfirmBorrar(null)}>
+          <div style={S.modal} onClick={(ev) => ev.stopPropagation()}>
+            <div style={S.panelTitle}>¿Eliminar este préstamo?</div>
+            <div style={S.hint}>Se borra el expediente completo con todos sus pagos, abonos y fotos. Esto no se puede deshacer.</div>
+            <div style={S.actions}><button style={{ ...S.btn, ...S.btnGhost }} onClick={() => setConfirmBorrar(null)}>Cancelar</button><button style={{ ...S.btn, ...S.btnDanger }} onClick={() => eliminarPrestamo(confirmBorrar)}>Sí, eliminar</button></div>
           </div>
         </div>)}
 
@@ -817,6 +895,13 @@ const S = {
   btn: { flex: 1, fontFamily: mono, fontSize: 14, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", padding: "13px 10px", borderRadius: 8, cursor: "pointer" },
   btnPrimary: { background: INK, color: PAPER, border: `1.5px solid ${INK}` },
   btnGhost: { background: "transparent", color: INK, border: `1.5px solid ${INK}` },
+  btnDanger: { background: "transparent", color: RED, border: `1.5px solid ${RED}` },
+  resumenBox: { border: `2px solid ${INK}`, borderRadius: 10, padding: "12px 14px", marginBottom: 14, background: PAPER_DK },
+  resumenTitle: { fontFamily: mono, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: INK_SOFT, marginBottom: 8 },
+  resumenGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
+  resumenItem: { display: "flex", flexDirection: "column" },
+  resumenCap: { fontFamily: mono, fontSize: 9.5, letterSpacing: "0.06em", textTransform: "uppercase", color: INK_SOFT },
+  resumenVal: { fontFamily: mono, fontSize: 17, fontWeight: 700, color: INK },
   btnWa: { background: WA, color: "#fff", border: `1.5px solid ${WA}` },
   resSub: { fontFamily: mono, fontSize: 12, color: INK_SOFT, marginBottom: 6 },
   hero: { marginTop: 6, padding: "14px 16px", border: `2px solid ${INK}`, borderRadius: 10, display: "flex", flexDirection: "column", gap: 2 },
