@@ -12,18 +12,13 @@ const TIPOS = ["Hipoteca", "Letra de cambio", "Empeño", "Pignoración", "Arrien
 const TIPOS_GARANTIA = ["Inmueble", "Vehículo", "Prenda / objeto", "Otro"];
 const STORAGE_KEY = "libro_prestamos_expedientes";
 
-// ===PERSIST_START (se reemplaza por localStorage al desplegar) ===
-async function loadPersisted() {
-  if (typeof window !== "undefined" && window.storage) {
-    try { const res = await window.storage.get(STORAGE_KEY); return res && res.value ? JSON.parse(res.value) : null; }
-    catch (e) { return null; }
-  }
-  return null;
+// ===PERSIST_START===
+function loadPersisted() {
+  try { const v = localStorage.getItem(STORAGE_KEY); return v ? JSON.parse(v) : null; }
+  catch (e) { return null; }
 }
-async function savePersisted(data) {
-  if (typeof window !== "undefined" && window.storage) {
-    try { await window.storage.set(STORAGE_KEY, JSON.stringify(data)); } catch (e) { }
-  }
+function savePersisted(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) { }
 }
 // ===PERSIST_END===
 
@@ -228,13 +223,11 @@ export default function LibroDePrestamos() {
   const sigDrawing = useRef(false);
   const sigLast = useRef({ x: 0, y: 0 });
 
-  // ---- Persistencia ----
+  // ---- Persistencia (localStorage) ----
   useEffect(() => {
-    (async () => {
-      const d = await loadPersisted();
-      if (d) { setExpedientes(d.expedientes || []); setLastBackup(d.lastBackup || null); if (d.firma) setFirma(d.firma); }
-      setLoaded(true);
-    })();
+    const d = loadPersisted();
+    if (d) { setExpedientes(d.expedientes || []); setLastBackup(d.lastBackup || null); if (d.firma) setFirma(d.firma); }
+    setLoaded(true);
   }, []);
   useEffect(() => {
     if (!loaded) return;
