@@ -109,7 +109,7 @@ export default function ReciboImagenDemo() {
         ctx.strokeStyle = INK_SOFT; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(40, 410); ctx.lineTo(260, 410); ctx.stroke();
         ctx.font = `11px ${mono}`; ctx.fillStyle = INK_SOFT;
-        ctx.fillText("Firma del prestamista", 40, 428);
+        ctx.fillText("Firma", 40, 428);
 
         // Fecha en firma
         ctx.fillText(fmtFecha(rec.fecha), 320, 428);
