@@ -12,13 +12,18 @@ const TIPOS = ["Hipoteca", "Letra de cambio", "Empeño", "Pignoración", "Arrien
 const TIPOS_GARANTIA = ["Inmueble", "Vehículo", "Prenda / objeto", "Otro"];
 const STORAGE_KEY = "libro_prestamos_expedientes";
 
-// ===PERSIST_START (localStorage) ===
+// ===PERSIST_START (se reemplaza por localStorage al desplegar) ===
 async function loadPersisted() {
-  try { const v = localStorage.getItem(STORAGE_KEY); return v ? JSON.parse(v) : null; }
-  catch (e) { return null; }
+  if (typeof window !== "undefined" && window.storage) {
+    try { const res = await window.storage.get(STORAGE_KEY); return res && res.value ? JSON.parse(res.value) : null; }
+    catch (e) { return null; }
+  }
+  return null;
 }
 async function savePersisted(data) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) { }
+  if (typeof window !== "undefined" && window.storage) {
+    try { await window.storage.set(STORAGE_KEY, JSON.stringify(data)); } catch (e) { }
+  }
 }
 // ===PERSIST_END===
 
@@ -212,19 +217,25 @@ export default function LibroDePrestamos() {
   const [cobroMonto, setCobroMonto] = useState(0);
   const [cobroFecha, setCobroFecha] = useState(hoyISO());
   const [recibo, setRecibo] = useState(null);
+  const [reciboUrl, setReciboUrl] = useState(null);
+  const [firma, setFirma] = useState(null);
+  const [firmaOpen, setFirmaOpen] = useState(false);
+  const sigRef = useRef(null);
+  const sigDrawing = useRef(false);
+  const sigLast = useRef({ x: 0, y: 0 });
 
   // ---- Persistencia ----
   useEffect(() => {
     (async () => {
       const d = await loadPersisted();
-      if (d) { setExpedientes(d.expedientes || []); setLastBackup(d.lastBackup || null); }
+      if (d) { setExpedientes(d.expedientes || []); setLastBackup(d.lastBackup || null); if (d.firma) setFirma(d.firma); }
       setLoaded(true);
     })();
   }, []);
   useEffect(() => {
     if (!loaded) return;
-    savePersisted({ expedientes, lastBackup });
-  }, [expedientes, lastBackup, loaded]);
+    savePersisted({ expedientes, lastBackup, firma });
+  }, [expedientes, lastBackup, firma, loaded]);
 
   const arr = esArr(tipoCredito);
   const r = useMemo(() => {
@@ -262,6 +273,52 @@ export default function LibroDePrestamos() {
     setExpedientes((p) => [exp, ...p]); setActiveId(exp.id); setExpOrigin("home"); setScreen("expediente");
   };
 
+  // ---- Firma: dibujar ----
+  const sigGetPos = (e, cv) => { const r = cv.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return { x: (t.clientX - r.left) * (cv.width / r.width), y: (t.clientY - r.top) * (cv.height / r.height) }; };
+  const sigStart = (e) => { e.preventDefault(); sigDrawing.current = true; sigLast.current = sigGetPos(e, sigRef.current); };
+  const sigMove = (e) => { if (!sigDrawing.current) return; e.preventDefault(); const ctx = sigRef.current.getContext("2d"); const p = sigGetPos(e, sigRef.current); ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(sigLast.current.x, sigLast.current.y); ctx.lineTo(p.x, p.y); ctx.stroke(); sigLast.current = p; };
+  const sigEnd = () => { sigDrawing.current = false; };
+  const sigClear = () => { if (sigRef.current) { const ctx = sigRef.current.getContext("2d"); ctx.clearRect(0, 0, sigRef.current.width, sigRef.current.height); } };
+  const sigSave = () => { if (sigRef.current) setFirma(sigRef.current.toDataURL("image/png")); setFirmaOpen(false); };
+
+  // ---- Generar recibo como imagen ----
+  const generarReciboImg = (rec, firmaImg) => {
+    const W = 600, H = 470, c = document.createElement("canvas"); c.width = W; c.height = H;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = PAPER; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.strokeRect(20, 20, W - 40, H - 40);
+    const sx = 40, sy = 50, sw = 210, sh = 34;
+    ctx.strokeStyle = GREEN; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, 6); ctx.stroke();
+    ctx.font = `bold 14px ${mono}`; ctx.fillStyle = GREEN; ctx.textBaseline = "middle"; ctx.fillText("RECIBO DE PAGO", sx + 16, sy + sh / 2);
+    ctx.textBaseline = "alphabetic";
+    ctx.font = `bold 22px ${sans}`; ctx.fillStyle = INK; ctx.fillText(rec.nombre, 40, 120);
+    ctx.font = `15px ${mono}`; ctx.fillStyle = INK_SOFT; ctx.fillText(`${rec.tipo} — Cuota N° ${rec.n} / ${rec.totalCuotas}`, 40, 148);
+    ctx.font = `bold 42px ${mono}`; ctx.fillStyle = INK; ctx.fillText(fmtCOP(rec.monto), 40, 200);
+    ctx.strokeStyle = RULE; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(40, 220); ctx.lineTo(W - 40, 220); ctx.stroke();
+    ctx.font = `14px ${mono}`; ctx.fillStyle = INK; ctx.fillText(`Fecha: ${fmtFecha(rec.fecha)}`, 40, 248);
+    if (rec.faltaDespues > 0) { ctx.font = `bold 14px ${mono}`; ctx.fillStyle = RED; ctx.fillText(`Falta de esta cuota: ${fmtCOP(rec.faltaDespues)}`, 40, 274); }
+    else { ctx.font = `bold 14px ${mono}`; ctx.fillStyle = GREEN; ctx.fillText("Cuota PAGADA ✓", 40, 274); }
+    ctx.strokeStyle = RULE; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(40, 300); ctx.lineTo(W - 40, 300); ctx.stroke();
+    const finalize = () => { setReciboUrl(c.toDataURL("image/png")); };
+    if (firmaImg) {
+      const img = new Image(); img.onload = () => {
+        const maxW = 200, maxH = 80, ratio = Math.min(maxW / img.width, maxH / img.height);
+        ctx.drawImage(img, 40, 315, img.width * ratio, img.height * ratio);
+        ctx.strokeStyle = INK_SOFT; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(40, 410); ctx.lineTo(260, 410); ctx.stroke();
+        ctx.font = `11px ${mono}`; ctx.fillStyle = INK_SOFT; ctx.fillText("Firma del prestamista", 40, 428);
+        ctx.beginPath(); ctx.moveTo(320, 410); ctx.lineTo(W - 40, 410); ctx.stroke(); ctx.fillText("Fecha", 320, 428);
+        ctx.fillText(fmtFecha(rec.fecha), 320, 398);
+        finalize();
+      }; img.src = firmaImg;
+    } else { ctx.font = `12px ${mono}`; ctx.fillStyle = INK_SOFT; ctx.fillText("(Sin firma configurada)", 40, 340); finalize(); }
+  };
+  const descargarRecibo = () => { if (!reciboUrl || !recibo) return; const a = document.createElement("a"); a.href = reciboUrl; a.download = `recibo-cuota-${recibo.n}.png`; a.click(); };
+  const compartirRecibo = async () => {
+    if (!reciboUrl || !recibo) return;
+    try { const blob = await (await fetch(reciboUrl)).blob(); const file = new File([blob], `recibo-cuota-${recibo.n}.png`, { type: "image/png" }); if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; } } catch (e) { }
+    descargarRecibo();
+  };
+
   const registrarCobro = (expId, n, monto, fecha) => {
     monto = Number(monto) || 0; if (monto <= 0) return;
     const e = expedientes.find((x) => x.id === expId); if (!e) return;
@@ -270,7 +327,8 @@ export default function LibroDePrestamos() {
     setExpedientes((prev) => prev.map((x) => (x.id === expId ? next : x)));
     const fila = derivarCuadro(next).filas.find((f) => f.n === n);
     const faltaDespues = Math.max(0, totalDe(next, fila) - pagadoDe(next, n));
-    setRecibo({ nombre: e.nombreDeudor, tipo: e.tipoCredito, telefono: e.telefono, n, monto, fecha, faltaDespues, porCobrar: resumen(next).porCobrar });
+    setRecibo({ nombre: e.nombreDeudor, tipo: e.tipoCredito, telefono: e.telefono, n, totalCuotas: e.plazo, monto, fecha, faltaDespues });
+    generarReciboImg({ nombre: e.nombreDeudor, tipo: e.tipoCredito, n, totalCuotas: e.plazo, monto, fecha, faltaDespues }, firma);
   };
   const limpiarCuota = (n) => setExpedientes((prev) => prev.map((e) => { if (e.id !== activeExp.id) return e; const pagos = { ...(e.pagos || {}) }; delete pagos[n]; return { ...e, pagos }; }));
   const agregarAbono = () => {
@@ -281,7 +339,7 @@ export default function LibroDePrestamos() {
   const quitarAbono = (id) => setExpedientes((prev) => prev.map((e) => e.id !== activeExp.id ? e : { ...e, abonosCapital: (e.abonosCapital || []).filter((a) => a.id !== id) }));
 
   const exportar = () => {
-    const data = { app: "Libro de Préstamos prueba", version: 1, fecha: new Date().toISOString(), expedientes };
+    const data = { app: "Libro de Préstamos", version: 1, fecha: new Date().toISOString(), expedientes };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -322,7 +380,7 @@ export default function LibroDePrestamos() {
       ? `Hola ${it.e.nombreDeudor}, le recordamos que su ${cuota} N° ${it.f.n} por ${fmtCOP(it.falta)} está pendiente desde el ${fmtFecha(it.fecha)}. Quedamos atentos. ¡Gracias!`
       : `Hola ${it.e.nombreDeudor}, le recordamos su ${cuota} N° ${it.f.n} por ${fmtCOP(it.falta)} con vencimiento el ${fmtFecha(it.fecha)}. ¡Gracias!`;
   };
-  const textoRecibo = (r) => `*Recibo de pago*\n${r.nombre}\n${r.tipo} — Cuota N° ${r.n}\nValor recibido: ${fmtCOP(r.monto)}\nFecha: ${fmtFecha(r.fecha)}\n${r.faltaDespues > 0 ? `Falta de esta cuota: ${fmtCOP(r.faltaDespues)}` : "Cuota PAGADA ✓"}\nSaldo del préstamo por cobrar: ${fmtCOP(r.porCobrar)}`;
+  const textoRecibo = () => "";
 
   return (
     <div style={S.stage}>
@@ -331,6 +389,7 @@ export default function LibroDePrestamos() {
         <div style={S.header}>
           {screen !== "home" && <button style={S.back} onClick={() => { setPagoOpen(null); setAbonoOpen(false); setScreen(backTarget()); }} aria-label="Volver">←</button>}
           <span style={S.headerTitle}>{screen === "home" ? "Libro de Préstamos" : (screen === "calc" || screen === "result") ? "Calculadora" : screen === "register" ? "Registrar" : screen === "cliente" ? "Cliente" : "Expediente"}</span>
+          {screen === "home" && <button style={S.firmaHeaderBtn} onClick={() => { setFirmaOpen(true); }}>✍ Firma</button>}
           {screen === "home" && <button style={S.respaldoBtn} onClick={() => { setRespaldoMsg(""); setRespaldoOpen(true); }}>Respaldo{respaldoPendiente && <span style={S.dot} />}</button>}
         </div>
 
@@ -587,21 +646,32 @@ export default function LibroDePrestamos() {
           </div>);
         })()}
 
-        {/* ===== MODAL: RECIBO ===== */}
-        {recibo && (<div style={S.overlay} onClick={() => setRecibo(null)}>
+        {/* ===== MODAL: RECIBO IMAGEN ===== */}
+        {recibo && (<div style={S.overlay} onClick={() => { setRecibo(null); setReciboUrl(null); }}>
           <div style={S.modal} onClick={(ev) => ev.stopPropagation()}>
-            <div style={S.reciboStamp}>Recibo de pago</div>
-            <div style={S.reciboBody}>
-              <div style={S.reciboName}>{recibo.nombre}</div>
-              <div style={S.reciboLine}>{recibo.tipo} — Cuota N° {recibo.n}</div>
-              <div style={S.reciboBig}>{fmtCOP(recibo.monto)}</div>
-              <div style={S.reciboLine}>Fecha: {fmtFecha(recibo.fecha)}</div>
-              <div style={{ ...S.reciboLine, color: recibo.faltaDespues > 0 ? RED : GREEN, fontWeight: 700 }}>{recibo.faltaDespues > 0 ? `Falta de esta cuota: ${fmtCOP(recibo.faltaDespues)}` : "Cuota PAGADA ✓"}</div>
-              <div style={S.reciboLine}>Saldo por cobrar: {fmtCOP(recibo.porCobrar)}</div>
-            </div>
+            {reciboUrl && <img src={reciboUrl} alt="Recibo" style={{ width: "100%", borderRadius: 8, display: "block", marginBottom: 12 }} />}
             <div style={S.actions}>
-              <button style={{ ...S.btn, ...S.btnGhost }} onClick={() => setRecibo(null)}>Cerrar</button>
-              <a style={{ ...S.btn, ...S.btnWa, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }} href={waLink(recibo.telefono, textoRecibo(recibo))} target="_blank" rel="noopener noreferrer">Compartir recibo</a>
+              <button style={{ ...S.btn, ...S.btnGhost }} onClick={() => { setRecibo(null); setReciboUrl(null); }}>Cerrar</button>
+              <button style={{ ...S.btn, ...S.btnGhost }} onClick={descargarRecibo}>Descargar</button>
+              <button style={{ ...S.btn, ...S.btnPrimary }} onClick={compartirRecibo}>Compartir</button>
+            </div>
+          </div>
+        </div>)}
+
+        {/* ===== MODAL: FIRMA ===== */}
+        {firmaOpen && (<div style={S.overlay} onClick={() => setFirmaOpen(false)}>
+          <div style={S.modal} onClick={(ev) => ev.stopPropagation()}>
+            <div style={S.panelTitle}>Dibuja tu firma</div>
+            <div style={S.panelMeta}>Usa el dedo (celular) o el mouse. Se guarda para todos tus recibos.</div>
+            <div style={{ marginTop: 12, border: `2px solid ${INK}`, borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+              <canvas ref={sigRef} width={500} height={160} style={{ width: "100%", height: 120, display: "block", cursor: "crosshair", touchAction: "none" }}
+                onMouseDown={sigStart} onMouseMove={sigMove} onMouseUp={sigEnd} onMouseLeave={sigEnd}
+                onTouchStart={sigStart} onTouchMove={sigMove} onTouchEnd={sigEnd} />
+            </div>
+            {firma && <div style={{ marginTop: 8 }}><img src={firma} alt="Firma actual" style={{ maxWidth: 150, maxHeight: 50 }} /><span style={{ fontFamily: mono, fontSize: 10, color: INK_SOFT, marginLeft: 8 }}>Firma actual</span></div>}
+            <div style={S.actions}>
+              <button style={{ ...S.btn, ...S.btnGhost }} onClick={sigClear}>Borrar</button>
+              <button style={{ ...S.btn, ...S.btnPrimary }} onClick={sigSave}>Guardar firma</button>
             </div>
           </div>
         </div>)}
@@ -753,7 +823,8 @@ const S = {
   reciboName: { fontFamily: sans, fontSize: 18, fontWeight: 700 },
   reciboLine: { fontFamily: mono, fontSize: 12.5, color: INK, marginTop: 4 },
   reciboBig: { fontFamily: mono, fontSize: 28, fontWeight: 700, margin: "8px 0 4px" },
-  respaldoBtn: { marginLeft: "auto", position: "relative", fontFamily: mono, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", background: "transparent", border: `1.5px solid ${INK}`, borderRadius: 6, padding: "6px 10px", cursor: "pointer", color: INK },
+  respaldoBtn: { fontFamily: mono, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", background: "transparent", border: `1.5px solid ${INK}`, borderRadius: 6, padding: "6px 10px", cursor: "pointer", color: INK, position: "relative" },
+  firmaHeaderBtn: { marginLeft: "auto", fontFamily: mono, fontSize: 11, fontWeight: 600, background: "transparent", border: `1.5px solid ${INK}`, borderRadius: 6, padding: "6px 10px", cursor: "pointer", color: INK },
   dot: { position: "absolute", top: -5, right: -5, width: 10, height: 10, borderRadius: "50%", background: RED, border: `1.5px solid ${PAPER_DK}` },
   respaldoExpl: { fontFamily: sans, fontSize: 13, color: INK, marginTop: 12, lineHeight: 1.5 },
   respaldoWarn: { fontFamily: mono, fontSize: 10.5, color: INK_SOFT, marginTop: 10, textAlign: "center" },
