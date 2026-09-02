@@ -516,7 +516,7 @@ export default function LibroDePrestamos() {
                 <div style={S.resumenBox}>
                   <div style={S.resumenTitle}>Mi negocio</div>
                   <div style={S.resumenGrid}>
-                    <div style={S.resumenItem}><span style={S.resumenCap}>En la calle</span><span style={S.resumenVal}>{fmtCOP(g.prestado)}</span></div>
+                    <div style={S.resumenItem}><span style={S.resumenCap}>Dinero Prestado</span><span style={S.resumenVal}>{fmtCOP(g.prestado)}</span></div>
                     <div style={S.resumenItem}><span style={S.resumenCap}>Por cobrar</span><span style={S.resumenVal}>{fmtCOP(g.porCobrar)}</span></div>
                     <div style={S.resumenItem}><span style={S.resumenCap}>Ganancia proyectada</span><span style={{ ...S.resumenVal, color: GREEN }}>{fmtCOP(g.ganancia)}</span></div>
                     <div style={S.resumenItem}><span style={S.resumenCap}>Cuotas en mora</span><span style={{ ...S.resumenVal, color: g.enMora ? RED : INK }}>{g.enMora}</span></div>
